@@ -1,6 +1,6 @@
 ## Plonky2 SHA512
 
-Contains Plonky2 implementation of [SHA-512](https://breakdance.github.io/breakdance/) hash function.
+Contains Plonky2 implementation of [SHA-512]([https://breakdance.github.io/breakdance/](https://medium.com/@zaid960928/cryptography-explaining-sha-512-ad896365a0c1)) hash function.
 
 Command (Runs basic benchmark) : 
 ```console
