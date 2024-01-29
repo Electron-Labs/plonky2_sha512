@@ -34,6 +34,12 @@ pub struct Sha512Targets {
     pub digest: Vec<BoolTarget>,
 }
 
+pub struct Sha512PreprocessedTargets {
+    pub preprocessed_message: Vec<BoolTarget>,
+    pub digest: Vec<BoolTarget>
+}
+
+
 pub fn array_to_bits(bytes: &[u8]) -> Vec<bool> {
     let mut bits = Vec::new();
     for &byte in bytes.iter() {
@@ -101,41 +107,11 @@ pub fn add_u64targets<F: RichField + Extendable<D>, const D: usize>(
     return U64Target{limbs: [low_addition_lo, high_addition_lo_carry_lo]}
 }
 
-//https://medium.com/@zaid960928/cryptography-explaining-sha-512-ad896365a0c1
-pub fn make_sha512_circuit<F: RichField + Extendable<D>, const D: usize>(
+pub fn sha512_circuit_with_preprocessed_input<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
-    msg_len: u128, // number of bits
-) -> Sha512Targets {
-    // 1. Preprocessing Input
-    /*
-        msg + padding_bits + len(msg) = N*1024
-        padding_bits = '0' bits with a leading '1' -> '100..'
-        | ----- msg ----- | | ----- padding_bits ----- | | ----- len(msg) ----- |
-        |   L<=2**128-2   | |         P>=1             | |         128          |
-        | <----------- ( N*1024 - 128 ) bits --------->|
-     */
-    let mut preprocessed_input_len = 0;
-
-    let mut input: Vec<BoolTarget> = Vec::new();
-    for _i in 0..msg_len{
-        input.push(builder.add_virtual_bool_target_unsafe());
-        preprocessed_input_len += 1;
-    }
-    // add necessary padding for p>=1
-    input.push(builder.constant_bool(true));
-    preprocessed_input_len += 1;
-    // append padding till only 128 bits for msg len are left in 1024 len block
-    while preprocessed_input_len%1024 != 896 {
-        input.push(builder.constant_bool(false));
-        preprocessed_input_len+=1
-    }
-    // append input len as 128 bits (msb to lsb)
-    for i in 0..128 {
-        let len_bit = ((msg_len as u128) >> (127 - i)) & 1;
-        input.push(builder.constant_bool(len_bit == 1));
-    }
-
-    let input_u64 = convert_bits_to_u64_target(builder, &input);
+    preprocessed_input: &Vec<BoolTarget>
+) -> Vec<BoolTarget> {
+    let input_u64 = convert_bits_to_u64_target(builder, preprocessed_input);
 
     let mut round_constants_u64_target: Vec<U64Target> = Vec::<U64Target>::new();
     for const_ in ROUND_CONSTANTS_{
@@ -164,8 +140,8 @@ pub fn make_sha512_circuit<F: RichField + Extendable<D>, const D: usize>(
             let s0_0 = builder.rrot_u64(&w[j-15].limbs, 1);
             let s0_1 = builder.rrot_u64(&w[j-15].limbs, 8);
             let s0_2 = rshift_u64target(builder, w[j-15].clone(), 7);
-            let s0 = U64Target{ 
-                    limbs: builder.unsafe_xor_many_u64(&[
+            let s0 = U64Target{
+                limbs: builder.unsafe_xor_many_u64(&[
                     s0_0, s0_1, s0_2.limbs
                 ])};
 
@@ -173,11 +149,11 @@ pub fn make_sha512_circuit<F: RichField + Extendable<D>, const D: usize>(
             let s1_1 = builder.rrot_u64(&w[j-2].limbs, 61);
             let s1_2 = rshift_u64target(builder, w[j-2].clone(), 6);
             let s1 = U64Target {
-                    limbs: builder.unsafe_xor_many_u64(&[
+                limbs: builder.unsafe_xor_many_u64(&[
                     s1_0, s1_1, s1_2.limbs
                 ])};
             let sum = add_u64targets(builder,
-                &[w[j-16].clone(), s0, w[j-7].clone(), s1]
+                                     &[w[j-16].clone(), s0, w[j-7].clone(), s1]
             );
             w[j] = sum;
         }
@@ -204,18 +180,18 @@ pub fn make_sha512_circuit<F: RichField + Extendable<D>, const D: usize>(
             let ch_1 = builder.and_u64(&ch_1_0, &g.limbs);
             let ch = U64Target{limbs:builder.unsafe_xor_many_u64(&[ch_0, ch_1])};
 
-            let temp1 = add_u64targets(builder, 
-                &[h, sum1, ch, round_constants_u64_target[j].clone(), w[j].clone()]
+            let temp1 = add_u64targets(builder,
+                                       &[h, sum1, ch, round_constants_u64_target[j].clone(), w[j].clone()]
             );
-            
+
             let sum0_0 = builder.rrot_u64(&a.limbs, 28);
             let sum0_1 = builder.rrot_u64(&a.limbs, 34);
             let sum0_2 = builder.rrot_u64(&a.limbs, 39);
             let sum0 = U64Target{
                 limbs: builder.unsafe_xor_many_u64(
                     &[sum0_0, sum0_1, sum0_2]
-            )};
-            
+                )};
+
             let maj_0 = builder.and_u64(&a.limbs, &b.limbs);
             let maj_1 = builder.and_u64(&a.limbs, &c.limbs);
             let maj_2 = builder.and_u64(&b.limbs, &c.limbs);
@@ -254,6 +230,45 @@ pub fn make_sha512_circuit<F: RichField + Extendable<D>, const D: usize>(
             }
         }
     }
+    digest
+}
+
+//https://medium.com/@zaid960928/cryptography-explaining-sha-512-ad896365a0c1
+pub fn make_sha512_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    msg_len: u128, // number of bits
+) -> Sha512Targets {
+    // 1. Preprocessing Input
+    /*
+        msg + padding_bits + len(msg) = N*1024
+        padding_bits = '0' bits with a leading '1' -> '100..'
+        | ----- msg ----- | | ----- padding_bits ----- | | ----- len(msg) ----- |
+        |   L<=2**128-2   | |         P>=1             | |         128          |
+        | <----------- ( N*1024 - 128 ) bits --------->|
+     */
+    let mut preprocessed_input_len = 0;
+
+    let mut input: Vec<BoolTarget> = Vec::new();
+    for _i in 0..msg_len{
+        input.push(builder.add_virtual_bool_target_unsafe());
+        preprocessed_input_len += 1;
+    }
+    // add necessary padding for p>=1
+    input.push(builder.constant_bool(true));
+    preprocessed_input_len += 1;
+    // append padding till only 128 bits for msg len are left in 1024 len block
+    while preprocessed_input_len%1024 != 896 {
+        input.push(builder.constant_bool(false));
+        preprocessed_input_len+=1
+    }
+    // append input len as 128 bits (msb to lsb)
+    for i in 0..128 {
+        let len_bit = ((msg_len as u128) >> (127 - i)) & 1;
+        input.push(builder.constant_bool(len_bit == 1));
+    }
+
+    let digest = sha512_circuit_with_preprocessed_input(builder, &input);
+
     Sha512Targets{ message: input, digest }
 }
 
