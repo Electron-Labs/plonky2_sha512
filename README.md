@@ -14,3 +14,6 @@ Time taken to build the circuit the proof - 287.681709ms
 Time taken to generate the proof - 737.203333ms
 Time taken to verify the proof - 42ns
 ```
+
+## Developer chat
+In case you wish to contribute or collaborate, you can join our ZK builder chat at - https://t.me/+leHcoDWYoaFiZDM1
